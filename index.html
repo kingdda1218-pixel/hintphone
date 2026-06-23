@@ -206,7 +206,7 @@
 // ===================================================================
 // 설정: 앱스크립트 웹앱 URL (배포한 /exec 주소)
 // ===================================================================
-const API_URL = "https://script.google.com/macros/s/AKfycbxo3KgR1UC5D4I3rF68Y9kXFNthkeh2GhJpYIFNDdzT7bXm4Vt9O25Dg0HDZcgeCDq4kw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxK7Zh9YMyPxg_u_D7GnavTMz1gdwb1Rzt68Dqzpb_ExYDgvGWHeCf6Pa0N8ZSdY4j-vA/exec";
 const CACHE_KEY = "hintphone_data_v1";
 
 let DATA = null;          // { themes:[...], staffCode }
@@ -216,25 +216,49 @@ let hintCount = 0;
 
 const $ = id => document.getElementById(id);
 
-// ---- 데이터 로드: 네트워크 우선, 실패 시 캐시 ----
-async function loadData(){
-  let fromCache = false;
-  try{
-    const res = await fetch(API_URL, {cache:"no-store"});
-    if(!res.ok) throw new Error("net");
-    DATA = await res.json();
-    // 받아온 데이터를 기기에 저장 (오프라인 대비)
+// ---- 데이터 로드: JSONP(네트워크) 우선, 실패 시 캐시 ----
+function loadData(){
+  const cached = localStorage.getItem(CACHE_KEY);
+
+  // JSONP 콜백 등록
+  const cbName = "hintphoneCb_" + Date.now();
+  let done = false;
+
+  window[cbName] = function(data){
+    done = true;
+    DATA = data;
     try{ localStorage.setItem(CACHE_KEY, JSON.stringify(DATA)); }catch(e){}
-  }catch(e){
-    // 네트워크 실패 → 저장해둔 데이터 사용
-    const cached = localStorage.getItem(CACHE_KEY);
-    if(cached){ DATA = JSON.parse(cached); fromCache = true; }
+    cleanup();
+    afterLoad(false);
+  };
+
+  function cleanup(){
+    try{ delete window[cbName]; }catch(e){ window[cbName] = undefined; }
+    if(scriptEl && scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
   }
 
-  if(!DATA){
-    $('loadStatus').innerHTML = "힌트를 불러오지 못했습니다.<br>와이파이가 되는 곳에서 한 번 열어 주세요.";
-    return;
+  // script 태그로 호출 (CORS 우회)
+  const scriptEl = document.createElement('script');
+  scriptEl.src = API_URL + "?callback=" + cbName;
+  scriptEl.onerror = function(){ fallback(); };
+  document.head.appendChild(scriptEl);
+
+  // 타임아웃: 6초 안에 응답 없으면 캐시로
+  setTimeout(function(){ if(!done) fallback(); }, 6000);
+
+  function fallback(){
+    if(done) return;
+    done = true;
+    cleanup();
+    if(cached){ DATA = JSON.parse(cached); afterLoad(true); }
+    else {
+      $('loadStatus').innerHTML = "힌트를 불러오지 못했습니다.<br>와이파이가 되는 곳에서 한 번 열어 주세요.";
+    }
   }
+}
+
+function afterLoad(fromCache){
+  if(!DATA) return;
   buildThemeList();
   $('offlineTag').textContent = fromCache ? "저장된 데이터 (오프라인)" : "";
   show('screen-theme');
